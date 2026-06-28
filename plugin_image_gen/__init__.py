@@ -130,7 +130,7 @@ _LIST_DEF = ToolDef(
 class ImageGenPlugin(LunaPlugin):
     manifest = PluginManifest(
         name="plugin-image-gen",
-        version="0.3.0",
+        version="0.3.1",
         description=(
             "Generate and edit images inline in chat with the best models — "
             "Nano Banana Pro (Gemini), GPT Image, and FLUX. Built on luna_sdk v0."
@@ -309,16 +309,37 @@ class ImageGenPlugin(LunaPlugin):
         )
         return json.dumps(payload)
 
+    def _storage_provider(self) -> Any | None:
+        """Resolve the Files StorageProvider.
+
+        plugin-files registers under the provider-registry key ``"storage"``
+        (`manifest.provider="storage"`), so that is the canonical access path on
+        current cores — there is no ``ctx.storage`` shortcut yet. We prefer the
+        registry and fall back to ``ctx.storage`` only for a future core that adds
+        the convenience property. Resolved per call (never cached at on_load) so
+        we see plugin-files whenever it registers, regardless of load order.
+        """
+        ctx = self._ctx
+        if ctx is None:
+            return None
+        registry = getattr(ctx, "provider_registry", None)
+        if registry is not None:
+            try:
+                if registry.has("storage"):
+                    return registry.get("storage")
+            except Exception as exc:  # noqa: BLE001 — registry hiccup must not block the render
+                log.warning("image-gen: storage provider lookup failed: %s", exc)
+        return getattr(ctx, "storage", None)
+
     async def _save_to_files(self, data: bytes, mime: str, name: str) -> str | None:
         """Best-effort copy into the Files storage provider. Returns the Files
         ref (e.g. `images/<name>`) or None when no storage provider is enabled."""
-        ctx = self._ctx
-        storage_provider = getattr(ctx, "storage", None) if ctx is not None else None
-        if storage_provider is None:
+        provider = self._storage_provider()
+        if provider is None:
             return None
         ref = f"images/{name}"
         try:
-            stored = await storage_provider.save(data, filename=ref, media_type=mime)
+            stored = await provider.save(data, filename=ref, media_type=mime)
             return getattr(stored, "ref", None) or ref
         except Exception as exc:  # noqa: BLE001 — Files copy is a nicety, never block the render
             log.warning("image-gen: could not save to Files (%s): %s", ref, exc)

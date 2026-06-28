@@ -1,6 +1,6 @@
 [project]
 name = "plugin-image-gen"
-version = "0.3.0"
+version = "0.3.1"
 description = "Generate and edit images inline in chat with the best models — Nano Banana Pro (Gemini), GPT Image, and FLUX. Built on luna_sdk v0."
 readme = "README.md"
 license = { text = "MIT" }

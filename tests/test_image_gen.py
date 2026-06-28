@@ -314,24 +314,40 @@ class _FakeStorage:
         )
 
 
+class _FakeRegistry:
+    """Minimal ProviderRegistry stand-in (mirrors core's get/has)."""
+
+    def __init__(self, impls=None) -> None:
+        self._impls = dict(impls or {})
+
+    def has(self, key: str) -> bool:
+        return key in self._impls
+
+    def get(self, key: str, _type=None):
+        return self._impls[key]
+
+
 class _FakeContext:
-    def __init__(self, storage=None) -> None:
+    def __init__(self, storage=None, provider_registry=None) -> None:
         self.tool_registry = _FakeToolRegistry()
         self.vault = None
         self.skill_registry = None
         self.events = None
+        # `storage` is the (future) convenience property; current cores expose the
+        # provider only via the registry, so tests cover both paths.
         self.storage = storage
+        self.provider_registry = provider_registry
 
     def get_env(self, _name: str) -> str | None:
         return None
 
 
-async def _load(monkeypatch, key="k", storage=None) -> tuple[ImageGenPlugin, _FakeContext]:
+async def _load(monkeypatch, key="k", storage=None, provider_registry=None) -> tuple[ImageGenPlugin, _FakeContext]:
     # Neutralize native-env key leakage from the dev machine.
     for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "BFL_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     plugin = ImageGenPlugin()
-    ctx = _FakeContext(storage=storage)
+    ctx = _FakeContext(storage=storage, provider_registry=provider_registry)
     await plugin.on_load(ctx)
 
     async def _fake_key(provider: str) -> str | None:
@@ -384,6 +400,24 @@ class TestToolHandlers:
         assert "Saved to Files" in out["embed_iframe"]
         # inline render still uses the plugin's own public route, not the Files URL
         assert out["image_url"].startswith("/api/p/plugin-image-gen/file/")
+
+    async def test_generate_copies_via_provider_registry(self, monkeypatch, tmp_path) -> None:
+        # The canonical path on current cores: no ctx.storage shortcut, the
+        # StorageProvider is only reachable via ctx.provider_registry["storage"].
+        monkeypatch.setenv("LUNA_IMAGE_GEN_DIR", str(tmp_path))
+
+        async def fake_generate(model, prompt, **kwargs):
+            return {"image_bytes": PNG, "mime": "image/png"}
+
+        monkeypatch.setattr(providers, "generate", fake_generate)
+        store = _FakeStorage()
+        registry = _FakeRegistry({"storage": store})
+        plugin, ctx = await _load(monkeypatch, provider_registry=registry)  # no ctx.storage
+        out = json.loads(await ctx.tool_registry.tools["generate_image"](prompt="a cat"))
+        assert len(store.saved) == 1
+        ref, data, media = store.saved[0]
+        assert ref.startswith("images/") and data == PNG and media == "image/png"
+        assert out["saved_to_files"] == ref
 
     async def test_generate_without_storage_still_renders(self, monkeypatch, tmp_path) -> None:
         monkeypatch.setenv("LUNA_IMAGE_GEN_DIR", str(tmp_path))
