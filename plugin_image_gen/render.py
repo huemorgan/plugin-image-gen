@@ -8,22 +8,50 @@ the document or the model's context.
 Path-prefix safety: the chat iframe is `sandbox="allow-scripts"` (an opaque
 origin — it CANNOT read `window.parent`), and Luna can be hosted behind a mount
 prefix (luna-service serves each tenant under `/a/<slug>/...`). A root-absolute
-`/api/...` src would resolve to the host root and 404 there. So we emit a
-**relative** URL: an `about:srcdoc` document resolves relative URLs against the
-parent document's URL, which in the chat view is `<origin><mount>/chat` — so
-`api/p/...` resolves to `<origin><mount>/api/p/...` both behind a prefix and on
-a bare localhost.
+`/api/...` src resolves to the host root and 404s there.
+
+A plain relative URL is NOT enough either: the chat URL is `<mount>/chat/<id>`
+(two levels deep — see Luna's `Shell.tsx` router), so `api/p/...` would resolve
+to `<mount>/chat/api/p/...` and 404. We can't read the mount from JS (opaque
+origin blocks `window.parent`), but an `about:srcdoc` document inherits the
+PARENT's base URL, so `document.baseURI` is the full chat URL. We strip the
+trailing SPA route segment (`/chat/<id>`, `/settings/...`, `/p/<id>`,
+`/approvals`) to recover `<origin><mount>` and build an absolute image URL that
+is correct at any route depth and behind any prefix. The relative URL stays as a
+no-JS fallback.
 """
 
 from __future__ import annotations
 
 import html as _html
+import json as _json
 
 
 def _embed_src(image_url: str) -> str:
     """Make the served URL relative so the sandboxed srcdoc iframe resolves it
     against the parent's mount prefix instead of the host root."""
     return image_url.lstrip("/") if image_url.startswith("/") else image_url
+
+
+def _mount_script(rel_url: str) -> str:
+    """Inline JS that rewrites the image src/href to an absolute, mount-correct
+    URL derived from the parent page's base URL. No-op if anything fails (the
+    static relative `src` remains as the fallback)."""
+    rel_js = _json.dumps(rel_url)
+    return (
+        "<script>(function(){try{"
+        f"var rel={rel_js};"
+        "var u=new URL(document.baseURI);"
+        "var mount=u.pathname.replace(/\\/(chat|settings|approvals|p)(\\/[^?#]*)?$/,'');"
+        "if(mount==='/')mount='';"
+        "mount=mount.replace(/\\/$/,'');"
+        "var abs=u.origin+mount+'/'+rel.replace(/^\\//,'');"
+        "var img=document.getElementById('img');"
+        "var lnk=document.getElementById('lnk');"
+        "if(img)img.src=abs;"
+        "if(lnk)lnk.href=abs;"
+        "}catch(e){}})();</script>"
+    )
 
 _TEMPLATE = """<!DOCTYPE html>
 <html>
@@ -72,8 +100,8 @@ _TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
   <div class="img-wrap">
-    <a href="{url}" target="_blank" rel="noopener">
-      <img src="{url}" alt="{alt}" loading="lazy">
+    <a id="lnk" href="{url}" target="_blank" rel="noopener">
+      <img id="img" src="{url}" alt="{alt}" loading="lazy">
     </a>
   </div>
   <div class="meta">
@@ -81,6 +109,7 @@ _TEMPLATE = """<!DOCTYPE html>
     <span class="badge">{badge}</span>
   </div>
   {saved}
+  {script}
 </body>
 </html>"""
 
@@ -96,10 +125,12 @@ def render_image_embed(
     line tells the user where to find the saved copy.
     """
     saved = _SAVED_LINE.format(ref=_html.escape(saved_to)) if saved_to else ""
+    rel = _embed_src(image_url)
     return _TEMPLATE.format(
-        url=_html.escape(_embed_src(image_url), quote=True),
+        url=_html.escape(rel, quote=True),
         alt=_html.escape(prompt or "Generated image", quote=True),
         caption=_html.escape((prompt or "")[:240]),
         badge=_html.escape(model_label or "image"),
         saved=saved,
+        script=_mount_script(rel),
     )

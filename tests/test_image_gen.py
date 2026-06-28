@@ -140,6 +140,15 @@ def test_embed_url_is_relative_for_path_prefix() -> None:
     assert 'src="api/p/plugin-image-gen/file/abc.png"' in html
 
 
+def test_embed_has_mount_resolving_script() -> None:
+    # The embed must carry JS that recovers the mount from document.baseURI so it
+    # works at the /chat/<id> route depth (a plain relative URL would 404 there).
+    html = render_image_embed("/api/p/plugin-image-gen/file/abc.png")
+    assert "document.baseURI" in html
+    assert "(chat|settings|approvals|p)" in html
+    assert '"api/p/plugin-image-gen/file/abc.png"' in html  # rel path embedded in JS
+
+
 # ---------------- provider logic (mocked HTTP) ----------------
 @pytest.mark.asyncio
 class TestProviders:
