@@ -38,6 +38,7 @@ def _install_luna_sdk_stub() -> None:
         description: str = ""
         tools: list = field(default_factory=list)
         routes_module: str | None = None
+        capabilities: list = field(default_factory=list)
 
     @dataclass
     class CredentialSlot:

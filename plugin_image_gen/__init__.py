@@ -130,13 +130,17 @@ _LIST_DEF = ToolDef(
 class ImageGenPlugin(LunaPlugin):
     manifest = PluginManifest(
         name="plugin-image-gen",
-        version="0.2.0",
+        version="0.3.0",
         description=(
             "Generate and edit images inline in chat with the best models — "
             "Nano Banana Pro (Gemini), GPT Image, and FLUX. Built on luna_sdk v0."
         ),
         tools=[_GENERATE_DEF, _EDIT_DEF, _LIST_DEF],
         routes_module="routes",
+        # Consume the storage capability so generated images also land in Files
+        # (visible/durable). The inline preview still uses the plugin's own public
+        # route; Files is the findable copy.
+        capabilities=["storage"],
     )
 
     def __init__(self) -> None:
@@ -214,7 +218,7 @@ class ImageGenPlugin(LunaPlugin):
             result = await providers.generate(
                 m, prompt, aspect=aspect_ratio, api_key=key, base_url=self._base_url(m.provider),
             )
-            return self._finish(result, m, prompt, aspect_ratio)
+            return await self._finish(result, m, prompt, aspect_ratio)
 
         async def _edit_image(
             prompt: str,
@@ -236,7 +240,7 @@ class ImageGenPlugin(LunaPlugin):
                 m, prompt, (source["bytes"], source["mime"]), aspect=aspect_ratio,
                 api_key=key, base_url=self._base_url(m.provider),
             )
-            return self._finish(result, m, prompt, aspect_ratio)
+            return await self._finish(result, m, prompt, aspect_ratio)
 
         async def _list_image_models() -> str:
             out = []
@@ -268,12 +272,23 @@ class ImageGenPlugin(LunaPlugin):
             ),
         }
 
-    def _finish(self, result: dict[str, Any], model: providers.Model, prompt: str, aspect_ratio: str) -> str:
-        """Persist the bytes, build the inline embed, return a SMALL JSON string."""
+    async def _finish(self, result: dict[str, Any], model: providers.Model, prompt: str, aspect_ratio: str) -> str:
+        """Persist the bytes, build the inline embed, return a SMALL JSON string.
+
+        Bytes are written twice on purpose: to this plugin's own store (powers the
+        public route the sandboxed inline `<img>` loads — the Files `/read` URL is
+        auth-gated and can't render in the chat iframe), and, when a storage
+        provider is enabled, into Files under `images/` so the user can actually
+        find and keep the image.
+        """
         if "error" in result:
             return json.dumps(result)
-        saved = storage.save_image(result["image_bytes"], result.get("mime", "image/png"))
-        return json.dumps({
+        data = result["image_bytes"]
+        mime = result.get("mime", "image/png")
+        saved = storage.save_image(data, mime)  # inline-render copy (public route)
+        files_ref = await self._save_to_files(data, mime, str(saved["id"]))
+
+        payload: dict[str, Any] = {
             "ok": True,
             "provider": model.provider,
             "model": model.key,
@@ -284,8 +299,30 @@ class ImageGenPlugin(LunaPlugin):
             "file_path": saved["path"],
             "mime": saved["mime"],
             "bytes": saved["bytes"],
-            "embed_iframe": render_image_embed(saved["url"], prompt=prompt, model_label=model.label),
-        })
+        }
+        if files_ref:
+            # Tell the agent (and the user, via the caption) exactly where it landed.
+            payload["saved_to_files"] = files_ref
+            payload["files_note"] = f"Saved to Files → {files_ref}"
+        payload["embed_iframe"] = render_image_embed(
+            str(saved["url"]), prompt=prompt, model_label=model.label, saved_to=files_ref or "",
+        )
+        return json.dumps(payload)
+
+    async def _save_to_files(self, data: bytes, mime: str, name: str) -> str | None:
+        """Best-effort copy into the Files storage provider. Returns the Files
+        ref (e.g. `images/<name>`) or None when no storage provider is enabled."""
+        ctx = self._ctx
+        storage_provider = getattr(ctx, "storage", None) if ctx is not None else None
+        if storage_provider is None:
+            return None
+        ref = f"images/{name}"
+        try:
+            stored = await storage_provider.save(data, filename=ref, media_type=mime)
+            return getattr(stored, "ref", None) or ref
+        except Exception as exc:  # noqa: BLE001 — Files copy is a nicety, never block the render
+            log.warning("image-gen: could not save to Files (%s): %s", ref, exc)
+            return None
 
     async def _load_source(self, image_path: str | None, image_url: str | None) -> dict[str, Any]:
         if image_path:

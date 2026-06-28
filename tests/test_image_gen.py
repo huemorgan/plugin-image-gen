@@ -13,6 +13,7 @@ import base64
 import json
 import re
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -287,23 +288,50 @@ class _FakeToolRegistry:
         self.tools[tool_def.name] = handler
 
 
-class _FakeContext:
+@dataclass
+class _StoredFile:
+    ref: str
+    url: str
+    filename: str
+    media_type: str
+    size_bytes: int
+
+
+class _FakeStorage:
+    """Minimal StorageProvider stand-in: records every save()."""
+
     def __init__(self) -> None:
+        self.saved: list[tuple[str, bytes, str | None]] = []
+
+    async def save(self, data: bytes, *, filename: str, media_type: str | None = None) -> _StoredFile:
+        self.saved.append((filename, data, media_type))
+        return _StoredFile(
+            ref=filename,
+            url=f"/api/p/plugin-files/read/{filename}",
+            filename=filename.split("/")[-1],
+            media_type=media_type or "application/octet-stream",
+            size_bytes=len(data),
+        )
+
+
+class _FakeContext:
+    def __init__(self, storage=None) -> None:
         self.tool_registry = _FakeToolRegistry()
         self.vault = None
         self.skill_registry = None
         self.events = None
+        self.storage = storage
 
     def get_env(self, _name: str) -> str | None:
         return None
 
 
-async def _load(monkeypatch, key="k") -> tuple[ImageGenPlugin, _FakeContext]:
+async def _load(monkeypatch, key="k", storage=None) -> tuple[ImageGenPlugin, _FakeContext]:
     # Neutralize native-env key leakage from the dev machine.
     for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "BFL_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     plugin = ImageGenPlugin()
-    ctx = _FakeContext()
+    ctx = _FakeContext(storage=storage)
     await plugin.on_load(ctx)
 
     async def _fake_key(provider: str) -> str | None:
@@ -337,6 +365,38 @@ class TestToolHandlers:
         assert "embed_iframe" in out and out["image_url"] in out["embed_iframe"]
         # the heavy bytes must NOT be inlined into the model-facing result
         assert "base64" not in raw and len(raw) < 4000
+
+    async def test_generate_copies_into_files_when_storage_present(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("LUNA_IMAGE_GEN_DIR", str(tmp_path))
+
+        async def fake_generate(model, prompt, **kwargs):
+            return {"image_bytes": PNG, "mime": "image/png"}
+
+        monkeypatch.setattr(providers, "generate", fake_generate)
+        store = _FakeStorage()
+        plugin, ctx = await _load(monkeypatch, storage=store)
+        out = json.loads(await ctx.tool_registry.tools["generate_image"](prompt="a cat"))
+        # the image was copied into Files under images/
+        assert len(store.saved) == 1
+        ref, data, media = store.saved[0]
+        assert ref.startswith("images/") and data == PNG and media == "image/png"
+        assert out["saved_to_files"] == ref
+        assert "Saved to Files" in out["embed_iframe"]
+        # inline render still uses the plugin's own public route, not the Files URL
+        assert out["image_url"].startswith("/api/p/plugin-image-gen/file/")
+
+    async def test_generate_without_storage_still_renders(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("LUNA_IMAGE_GEN_DIR", str(tmp_path))
+
+        async def fake_generate(model, prompt, **kwargs):
+            return {"image_bytes": PNG, "mime": "image/png"}
+
+        monkeypatch.setattr(providers, "generate", fake_generate)
+        plugin, ctx = await _load(monkeypatch)  # no storage provider
+        out = json.loads(await ctx.tool_registry.tools["generate_image"](prompt="x"))
+        assert out["ok"] is True
+        assert "saved_to_files" not in out
+        assert "Saved to Files" not in out["embed_iframe"]
 
     async def test_generate_relays_provider_error(self, monkeypatch, tmp_path) -> None:
         monkeypatch.setenv("LUNA_IMAGE_GEN_DIR", str(tmp_path))

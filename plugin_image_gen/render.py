@@ -44,6 +44,7 @@ _TEMPLATE = """<!DOCTYPE html>
     gap: 8px;
   }}
   .caption {{ color: #c7c7d9; font-size: 12px; line-height: 1.35; flex: 1; }}
+  .saved {{ color: #6f6f86; font-size: 11px; }}
   .badge {{
     color: #8a8aa3;
     font-size: 11px;
@@ -65,15 +66,26 @@ _TEMPLATE = """<!DOCTYPE html>
     <span class="caption">{caption}</span>
     <span class="badge">{badge}</span>
   </div>
+  {saved}
 </body>
 </html>"""
 
+_SAVED_LINE = '<span class="saved">Saved to Files \u2192 {ref}</span>'
 
-def render_image_embed(image_url: str, *, prompt: str = "", model_label: str = "") -> str:
-    """Return a self-contained HTML document that shows the image inline."""
+
+def render_image_embed(
+    image_url: str, *, prompt: str = "", model_label: str = "", saved_to: str = ""
+) -> str:
+    """Return a self-contained HTML document that shows the image inline.
+
+    When ``saved_to`` is given (the Files ref, e.g. ``images/<name>``), a small
+    line tells the user where to find the saved copy.
+    """
+    saved = _SAVED_LINE.format(ref=_html.escape(saved_to)) if saved_to else ""
     return _TEMPLATE.format(
         url=_html.escape(image_url, quote=True),
         alt=_html.escape(prompt or "Generated image", quote=True),
         caption=_html.escape((prompt or "")[:240]),
         badge=_html.escape(model_label or "image"),
+        saved=saved,
     )
