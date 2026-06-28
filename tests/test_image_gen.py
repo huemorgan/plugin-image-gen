@@ -125,11 +125,19 @@ def test_storage_rejects_traversal(tmp_path, monkeypatch) -> None:
 # ---------------- render ----------------
 def test_embed_contains_url_and_escapes() -> None:
     html = render_image_embed("/api/p/plugin-image-gen/file/x.png", prompt="<b>cat</b>", model_label="Nano Banana Pro")
-    assert "/api/p/plugin-image-gen/file/x.png" in html
+    # The embed uses a RELATIVE url so a sandboxed srcdoc iframe resolves it
+    # against the parent mount prefix instead of the host root.
+    assert "api/p/plugin-image-gen/file/x.png" in html
+    assert 'src="/api' not in html and 'href="/api' not in html
     assert "<img" in html
     assert "Nano Banana Pro" in html
     assert "<b>cat</b>" not in html
     assert "&lt;b&gt;" in html
+
+
+def test_embed_url_is_relative_for_path_prefix() -> None:
+    html = render_image_embed("/api/p/plugin-image-gen/file/abc.png")
+    assert 'src="api/p/plugin-image-gen/file/abc.png"' in html
 
 
 # ---------------- provider logic (mocked HTTP) ----------------
@@ -378,7 +386,8 @@ class TestToolHandlers:
         assert out["model"] == "nano-banana-pro"
         assert out["aspect_ratio"] == "16:9"
         assert out["image_url"].startswith("/api/p/plugin-image-gen/file/")
-        assert "embed_iframe" in out and out["image_url"] in out["embed_iframe"]
+        # embed references the relative form (path-prefix safe)
+        assert "embed_iframe" in out and out["image_url"].lstrip("/") in out["embed_iframe"]
         # the heavy bytes must NOT be inlined into the model-facing result
         assert "base64" not in raw and len(raw) < 4000
 

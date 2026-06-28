@@ -2,14 +2,28 @@
 
 Luna renders a tool result's `embed_iframe` (a self-contained HTML document)
 directly in the conversation — the same hook `plugin-charts` / `plugin-giphy`
-use. The image is referenced by its served URL (a root-relative path that the
-sandboxed `srcdoc` iframe resolves against the parent page origin), so no heavy
-base64 ever lands in the document or the model's context.
+use. The image is referenced by its served URL, so no heavy base64 ever lands in
+the document or the model's context.
+
+Path-prefix safety: the chat iframe is `sandbox="allow-scripts"` (an opaque
+origin — it CANNOT read `window.parent`), and Luna can be hosted behind a mount
+prefix (luna-service serves each tenant under `/a/<slug>/...`). A root-absolute
+`/api/...` src would resolve to the host root and 404 there. So we emit a
+**relative** URL: an `about:srcdoc` document resolves relative URLs against the
+parent document's URL, which in the chat view is `<origin><mount>/chat` — so
+`api/p/...` resolves to `<origin><mount>/api/p/...` both behind a prefix and on
+a bare localhost.
 """
 
 from __future__ import annotations
 
 import html as _html
+
+
+def _embed_src(image_url: str) -> str:
+    """Make the served URL relative so the sandboxed srcdoc iframe resolves it
+    against the parent's mount prefix instead of the host root."""
+    return image_url.lstrip("/") if image_url.startswith("/") else image_url
 
 _TEMPLATE = """<!DOCTYPE html>
 <html>
@@ -83,7 +97,7 @@ def render_image_embed(
     """
     saved = _SAVED_LINE.format(ref=_html.escape(saved_to)) if saved_to else ""
     return _TEMPLATE.format(
-        url=_html.escape(image_url, quote=True),
+        url=_html.escape(_embed_src(image_url), quote=True),
         alt=_html.escape(prompt or "Generated image", quote=True),
         caption=_html.escape((prompt or "")[:240]),
         badge=_html.escape(model_label or "image"),
