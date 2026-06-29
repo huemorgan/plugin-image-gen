@@ -19,6 +19,11 @@ trailing SPA route segment (`/chat/<id>`, `/settings/...`, `/p/<id>`,
 `/approvals`) to recover `<origin><mount>` and build an absolute image URL that
 is correct at any route depth and behind any prefix. The relative URL stays as a
 no-JS fallback.
+
+Eager loading is mandatory: `loading="lazy"` never fires inside this sandboxed
+srcdoc iframe (the browser's intersection heuristic doesn't resolve in an opaque
+chat embed), so the image stays unloaded and shows as broken. Proven live —
+lazy = broken, eager = loads, everything else identical.
 """
 
 from __future__ import annotations
@@ -101,7 +106,7 @@ _TEMPLATE = """<!DOCTYPE html>
 <body>
   <div class="img-wrap">
     <a id="lnk" href="{url}" target="_blank" rel="noopener">
-      <img id="img" src="{url}" alt="{alt}" loading="lazy">
+      <img id="img" src="{url}" alt="{alt}" loading="eager">
     </a>
   </div>
   <div class="meta">

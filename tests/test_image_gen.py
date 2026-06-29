@@ -149,6 +149,14 @@ def test_embed_has_mount_resolving_script() -> None:
     assert '"api/p/plugin-image-gen/file/abc.png"' in html  # rel path embedded in JS
 
 
+def test_embed_image_loads_eager() -> None:
+    # loading="lazy" never fires inside the sandboxed srcdoc chat embed, so the
+    # image stays unloaded (shows broken). Eager loading is the whole fix.
+    html = render_image_embed("/api/p/plugin-image-gen/file/abc.png")
+    assert 'loading="eager"' in html
+    assert 'loading="lazy"' not in html
+
+
 # ---------------- provider logic (mocked HTTP) ----------------
 @pytest.mark.asyncio
 class TestProviders:

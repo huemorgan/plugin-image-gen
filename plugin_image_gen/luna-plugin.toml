@@ -2,7 +2,7 @@
 # the plugin's Python. Keep it in sync with the PluginManifest in __init__.py.
 
 name = "plugin-image-gen"
-version = "0.3.3"
+version = "0.3.4"
 description = "Generate and edit images inline in chat with the best models — Nano Banana Pro (Gemini), GPT Image, and FLUX."
 entry = "plugin_image_gen"
 sdk_version = "0"
