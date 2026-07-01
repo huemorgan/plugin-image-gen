@@ -6,3 +6,4 @@ dist/
 *.zip
 .venv/
 *.png
+!plugin_image_gen/assets/icon.png
