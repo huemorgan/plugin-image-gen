@@ -130,9 +130,10 @@ _LIST_DEF = ToolDef(
 class ImageGenPlugin(LunaPlugin):
     manifest = PluginManifest(
         name="plugin-image-gen",
+        shown_name="Image Generation",
         icon="image",
         image="assets/icon.png",
-        version="0.3.5",
+        version="0.3.6",
         description=(
             "Generate and edit images inline in chat with the best models — "
             "Nano Banana Pro (Gemini), GPT Image, and FLUX. Built on luna_sdk v0."
